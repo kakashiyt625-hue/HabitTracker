@@ -1,0 +1,70 @@
+name: Build Habit Tracker APK
+
+on:
+  workflow_dispatch:
+  push:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Locate project (folder layout or uploaded ZIP)
+        run: |
+          set -e
+          if [ -f settings.gradle ]; then
+            DIR="$PWD"
+          elif [ -f HabitTrackerAndroid/settings.gradle ]; then
+            DIR="$PWD/HabitTrackerAndroid"
+          else
+            Z=$(find . -maxdepth 2 -iname '*.zip' -not -path './.git/*' | head -n1)
+            if [ -z "$Z" ]; then echo "No project or ZIP found in repo"; exit 1; fi
+            echo "Unzipping $Z"
+            mkdir -p "$RUNNER_TEMP/proj"
+            unzip -q "$Z" -d "$RUNNER_TEMP/proj"
+            S=$(find "$RUNNER_TEMP/proj" -name settings.gradle | head -n1)
+            if [ -z "$S" ]; then echo "settings.gradle not found in ZIP"; exit 1; fi
+            DIR=$(dirname "$S")
+          fi
+          echo "Project dir: $DIR"
+          ls -la "$DIR"
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Build debug APK
+        run: gradle -p "$PROJECT_DIR" assembleDebug --stacktrace
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HabitTracker-debug-apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish APK as a GitHub Release (direct download)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "debug-${{ github.run_number }}" \
+            "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" \
+            --title "Habit Tracker debug build ${{ github.run_number }}" \
+            --notes "Debug APK built by GitHub Actions."
